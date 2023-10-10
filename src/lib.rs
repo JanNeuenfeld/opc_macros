@@ -22,7 +22,11 @@ pub fn new_opc_command(body: TokenStream) -> TokenStream {
     }
     else {panic!("Please provide the command name as literal")}
 
-    (start + &parse_fn(item_iter) + "}").parse().unwrap()
+    let res = start + &parse_fn(item_iter) + "}";
+
+    println!("{res}");
+
+    res.parse().unwrap()
 }
 
 fn parse_fn(body: IntoIter) -> String {
@@ -109,6 +113,7 @@ pub fn sopc_derive(input: TokenStream) -> TokenStream {
                         } else {bail!("missing argument")}
                     }
                 )*
+
                 for rest in args {
                     #(
                         if rest == #prefixes.to_string() + #fields {
@@ -149,6 +154,7 @@ pub fn serve_opc(body: TokenStream) -> TokenStream {
         impl OpcCommand for HelpCommand {
             fn run(&self) -> String {
                 match self.cmd.as_str() {
+                    "help" => Self::help(),
                     #(
                         #command_names => {#commands::help()}
                     )*
@@ -157,7 +163,7 @@ pub fn serve_opc(body: TokenStream) -> TokenStream {
             }
 
             fn help() -> String {
-                "Available commands: \n".to_string()#( + #command_names)*
+                "Available commands:".to_string()#(+ "\n" + #command_names)*
             }
         }
     ));
@@ -179,7 +185,7 @@ pub fn serve_opc(body: TokenStream) -> TokenStream {
 
     out.push(quote!(
         else {
-            println!("Unknown command! Use 'opc help' for further information")
+            println!("Unknown command! Use 'opc help help' for further information")
         }
     ));
 
