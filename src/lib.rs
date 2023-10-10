@@ -1,75 +1,62 @@
 extern crate proc_macro;
 
-use proc_macro::{TokenStream, TokenTree, Delimiter};
+use proc_macro::{TokenStream, TokenTree, Delimiter, token_stream::IntoIter};
 use syn::{parse_macro_input, DeriveInput};
 use quote::quote;
 use proc_macro2;
 
-#[derive(Debug, Clone)]
-enum Info {
-    Start,
-    Params
-}
-
-#[proc_macro_attribute]
-pub fn prefix(_: TokenStream, _: TokenStream) -> TokenStream {TokenStream::new()}
-
 #[proc_macro]
 pub fn new_opc_command(body: TokenStream) -> TokenStream {
 
-    let res = parse_fn(body, Info::Start);
-    return (res + "}").parse().unwrap();
+    let mut item_iter = body.into_iter();
+
+    let mut start = String::new();
+    if let Some(TokenTree::Literal(c)) = item_iter.next() {
+        let mut s: Vec<char> = c.to_string().trim_matches('\"').chars().collect();
+        s[0] = s[0].to_uppercase().nth(0).unwrap();
+        start += stringify!(
+            #[derive(Debug, Clone, opc_macros::SuperOpcCommand, Default)]
+            pub struct 
+        );
+        start += &(" ".to_string() + &s.iter().collect::<String>() + "Command {");
+    }
+    else {panic!("Please provide the command name as literal")}
+
+    (start + &parse_fn(item_iter) + "}").parse().unwrap()
 }
 
-fn parse_fn(body: TokenStream, info: Info, ) -> String {
+fn parse_fn(body: IntoIter) -> String {
 
     let mut out = String::new();
     let mut item_iter = body.into_iter();
-    let mut info = info;
 
-    match &info {
-        Info::Start => {
-            if let Some(TokenTree::Literal(c)) = item_iter.next() {
-                let mut s: Vec<char> = c.to_string().trim_matches('\"').chars().collect();
-                s[0] = s[0].to_uppercase().nth(0).unwrap();
-                out += stringify!(
-                    #[derive(Debug, Clone, opc_macros::SuperOpcCommand, Default)]
-                    pub struct 
-                );
-                out += &(" ".to_string() + &s.iter().collect::<String>() + "Command {");
-                info = Info::Params;
-            }
-            else {panic!("Please provide the command name as literal")}
-        }
-        Info::Params => {
-            match item_iter.next() {
-                Some(TokenTree::Group(list)) => {
-                    if list.delimiter() != Delimiter::Bracket {panic!("Please use brackets to limit your list of arguments '[]'")}
-                    let mut tt = list.stream().into_iter();
-                    let prefix = if let Some(TokenTree::Literal(pre)) = tt.next() {pre.to_string()} else {"".to_string()}; 
+    match item_iter.next() {
+        Some(TokenTree::Group(list)) => {
+            if list.delimiter() != Delimiter::Bracket {panic!("Please use brackets to limit your list of arguments '[]'")}
+            let mut tt = list.stream().into_iter();
+            let prefix = if let Some(TokenTree::Literal(pre)) = tt.next() {pre.to_string()} else {panic!("Please provide a prefix in literal form as first argument")};
+            if prefix == "\"\"" {panic!("Please provide a non-empty prefix")}
 
-                    while let Some(n) = tt.next() {
-                        eprintln!("{}", n.to_string());
-                        match n {
-                            TokenTree::Ident(p) => {
-                                if prefix != "\"\"" {out += &("#[prefix(".to_string() + &prefix + ")]");}
-                                out += &("pub ".to_string() + &p.to_string() + {if prefix != "\"\"" {": bool,"} else {": String,"}} );
-                            }
-                            _ => panic!("Please only use identifiers as argument names (no '-', '+', ...) ('_' allowed)"),
-                        }
-                    }    
+            while let Some(n) = tt.next() {
+                match n {
+                    TokenTree::Ident(p) => {
+                        out += &("#[prefix(".to_string() + &prefix + ")] pub " + &p.to_string() + ": bool,");
+                    }
+                    _ => panic!("Please only use identifiers as argument names"),
                 }
-                Some(_) => panic!("Please provide a list of arguments in brackets '[arg arg2 ...]'"),
-                None => return out,
-            }
+            }    
         }
+        Some(TokenTree::Ident(arg)) => {
+            out += &("pub ".to_string() + &arg.to_string() + ": String,");
+        }
+        Some(_) => panic!("Please provide a list of arguments in brackets '[arg arg2 ...]'"),
+        None => return out,
     }
-    return out + &parse_fn(item_iter.collect(), info);
+    return out + &parse_fn(item_iter);
 }
 
 #[proc_macro_derive(SuperOpcCommand, attributes(prefix))]
-pub fn writable_template_derive(input: TokenStream) -> TokenStream {
-    eprintln!("{}", input.to_string());
+pub fn sopc_derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
     let generics = &input.generics;
@@ -103,28 +90,26 @@ pub fn writable_template_derive(input: TokenStream) -> TokenStream {
         },
         _ => panic!("Must be a struct"),
     }
-    eprintln!("{:?}", fields);
-    eprintln!("{:?}", prefixes);
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     let c_name = name.clone().to_string().strip_suffix("Command").unwrap().to_ascii_lowercase();
     let min_len = no_prefix.len();
     let expanded = quote! {
         impl #impl_generics SuperOpcCommand for #name #ty_generics #where_clause {
-            fn parse(args: std::env::Args) -> anyhow::Result<#name> {
+            fn parse(args: Vec<String>) -> anyhow::Result<#name> {
                 let mut out = #name::default();
-                let mut a = args.collect::<Vec<String>>().into_iter();
-                if a.clone().count() < #min_len + 1 {bail!("missing argument")}
-                if let Some(c) = a.next() {
+                let mut args = args.into_iter();
+                if args.clone().count() < #min_len + 1 {bail!("missing argument")}
+                if let Some(c) = args.next() {
                     if c != #c_name {bail!("wrong command")}
                 }
                 #(
-                    if let Some(arg) = a.next() {
+                    if let Some(arg) = args.next() {
                         if arg.chars().collect::<Vec<char>>()[0].is_ascii_alphabetic() {
                             out.#no_prefix = arg;
                         } else {bail!("missing argument")}
                     }
                 )*
-                for rest in a {
+                for rest in args {
                     #(
                         if rest == #prefixes.to_string() + #fields {
                             out.#field_tokens = true
@@ -137,4 +122,66 @@ pub fn writable_template_derive(input: TokenStream) -> TokenStream {
     };
 
     TokenStream::from(expanded)
+}
+
+#[proc_macro]
+pub fn serve_opc(body: TokenStream) -> TokenStream {
+    let item_iter = body.into_iter();
+
+    let mut commands = Vec::new();
+    let mut command_names = Vec::new();
+
+    for tt in item_iter {
+        match tt {
+            TokenTree::Ident(cmd) => {
+                commands.push(proc_macro2::Ident::new(&cmd.to_string(), cmd.span().into()));
+                command_names.push(cmd.to_string().strip_suffix("Command").unwrap().to_ascii_lowercase())
+            }
+            _ => panic!("Please only provide identifiers")
+        }
+    }
+
+    let mut out = Vec::new();
+
+    out.push(quote!(
+        new_opc_command!("help" cmd);
+
+        impl OpcCommand for HelpCommand {
+            fn run(&self) -> String {
+                match self.cmd.as_str() {
+                    #(
+                        #command_names => {#commands::help()}
+                    )*
+                    _ => {"Unknown Command!".to_string()}
+                }
+            }
+
+            fn help() -> String {
+                "Available commands: \n".to_string()#( + #command_names)*
+            }
+        }
+    ));
+
+    out.push(quote!(
+            if let Ok(res) = HelpCommand::parse(args.clone()) {
+                println!("{}", res.run())
+            }
+        )
+    );
+
+    for cmd in commands {
+        out.push(quote!(
+            else if let Ok(res) = #cmd::parse(args.clone()) {
+                println!("{}", res.run())
+            }
+        ))
+    }
+
+    out.push(quote!(
+        else {
+            println!("Unknown command! Use 'opc help' for further information")
+        }
+    ));
+
+    proc_macro2::TokenStream::from_iter(out).into()
 }
