@@ -25,12 +25,11 @@ pub fn new_opc_command(body: TokenStream) -> TokenStream {
     (start + &parse_fn(item_iter) + "}").parse().unwrap()
 }
 
-fn parse_fn(body: IntoIter) -> String {
+fn parse_fn(mut body: IntoIter) -> String {
 
     let mut out = String::new();
-    let mut item_iter = body.into_iter();
 
-    match item_iter.next() {
+    match body.next() {
         Some(TokenTree::Group(list)) => {
             if list.delimiter() != Delimiter::Bracket {panic!("Please use brackets to limit your list of arguments '[]'")}
             let mut tt = list.stream().into_iter();
@@ -52,7 +51,7 @@ fn parse_fn(body: IntoIter) -> String {
         Some(_) => panic!("Please provide a list of arguments in brackets '[arg arg2 ...]'"),
         None => return out,
     }
-    return out + &parse_fn(item_iter);
+    return out + &parse_fn(body);
 }
 
 #[proc_macro_derive(SuperOpcCommand, attributes(prefix))]
@@ -152,9 +151,7 @@ pub fn serve_opc(body: TokenStream) -> TokenStream {
             fn run(&self) -> String {
                 match self.cmd.as_str() {
                     "help" => Self::help(),
-                    #(
-                        #command_names => {#commands::help()}
-                    )*
+                    #(#command_names => {#commands::help()})*
                     _ => {"Unknown Command!".to_string()}
                 }
             }
