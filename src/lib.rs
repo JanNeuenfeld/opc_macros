@@ -22,11 +22,7 @@ pub fn new_opc_command(body: TokenStream) -> TokenStream {
     }
     else {panic!("Please provide the command name as literal")}
 
-    let res = start + &parse_fn(item_iter) + "}";
-
-    println!("{res}");
-
-    res.parse().unwrap()
+    (start + &parse_fn(item_iter) + "}").parse().unwrap()
 }
 
 fn parse_fn(body: IntoIter) -> String {
@@ -99,18 +95,18 @@ pub fn sopc_derive(input: TokenStream) -> TokenStream {
     let min_len = no_prefix.len();
     let expanded = quote! {
         impl #impl_generics SuperOpcCommand for #name #ty_generics #where_clause {
-            fn parse(args: Vec<String>) -> anyhow::Result<#name> {
+            fn parse(args: Vec<String>) -> Option<anyhow::Result<#name>> {
                 let mut out = #name::default();
                 let mut args = args.into_iter();
-                if args.clone().count() < #min_len + 1 {bail!("missing argument")}
+                if args.clone().count() < #min_len + 1 {return Some(Err(anyhow::anyhow!("missing argument")))}
                 if let Some(c) = args.next() {
-                    if c != #c_name {bail!("wrong command")}
+                    if c != #c_name {return None}
                 }
                 #(
                     if let Some(arg) = args.next() {
                         if arg.chars().collect::<Vec<char>>()[0].is_ascii_alphabetic() {
                             out.#no_prefix = arg;
-                        } else {bail!("missing argument")}
+                        } else {return Some(Err(anyhow::anyhow!("missing or invalid argument")))}
                     }
                 )*
 
@@ -118,10 +114,13 @@ pub fn sopc_derive(input: TokenStream) -> TokenStream {
                     #(
                         if rest == #prefixes.to_string() + #fields {
                             out.#field_tokens = true
-                        }
+                        } else
                     )*
+                    {
+                        return Some(Err(anyhow::anyhow!("Unknown optional value: {}", rest)))
+                    }
                 }
-                Ok(out)
+                Some(Ok(out))
             }
         }
     };
@@ -169,16 +168,24 @@ pub fn serve_opc(body: TokenStream) -> TokenStream {
     ));
 
     out.push(quote!(
-            if let Ok(res) = HelpCommand::parse(args.clone()) {
-                println!("{}", res.run())
+            if let Some(res) = HelpCommand::parse(args.clone()) {
+                if let Err(err) = res {
+                    println!("{}", err)
+                } else {
+                    println!("{}", res.unwrap().run())
+                }
             }
         )
     );
 
     for cmd in commands {
         out.push(quote!(
-            else if let Ok(res) = #cmd::parse(args.clone()) {
-                println!("{}", res.run())
+            else if let Some(res) = #cmd::parse(args.clone()) {
+                if let Err(err) = res {
+                    println!("{}", err)
+                } else {
+                    println!("{}", res.unwrap().run())
+                }
             }
         ))
     }
