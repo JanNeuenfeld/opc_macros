@@ -92,13 +92,11 @@ pub fn sopc_derive(input: TokenStream) -> TokenStream {
     }
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     let c_name = name.clone().to_string().strip_suffix("Command").unwrap().to_ascii_lowercase();
-    let min_len = no_prefix.len();
     let expanded = quote! {
         impl #impl_generics SuperOpcCommand for #name #ty_generics #where_clause {
             fn parse(args: Vec<String>) -> Option<anyhow::Result<#name>> {
                 let mut out = #name::default();
                 let mut args = args.into_iter();
-                if args.clone().count() < #min_len + 1 {return Some(Err(anyhow::anyhow!("missing argument")))}
                 if let Some(c) = args.next() {
                     if c != #c_name {return None}
                 }
