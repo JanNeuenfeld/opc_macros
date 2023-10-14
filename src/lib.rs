@@ -1,33 +1,36 @@
 extern crate proc_macro;
 
-use proc_macro::{TokenStream, TokenTree, Delimiter, token_stream::IntoIter};
 use syn::{parse_macro_input, DeriveInput};
-use quote::quote;
-use proc_macro2;
+use quote::{quote, format_ident};
+use proc_macro2::{TokenStream, TokenTree, Delimiter, token_stream::IntoIter};
 
 #[proc_macro]
-pub fn new_opc_command(body: TokenStream) -> TokenStream {
+pub fn new_opc_command(body: proc_macro::TokenStream) -> proc_macro::TokenStream {
+
+    let body: TokenStream = body.into();
 
     let mut item_iter = body.into_iter();
 
-    let mut start = String::new();
+    let name;
     if let Some(TokenTree::Literal(c)) = item_iter.next() {
         let mut s: Vec<char> = c.to_string().trim_matches('\"').chars().collect();
         s[0] = s[0].to_uppercase().nth(0).unwrap();
-        start += stringify!(
-            #[derive(Debug, Clone, opc_macros::SuperOpcCommand, Default)]
-            pub struct 
-        );
-        start += &(" ".to_string() + &s.iter().collect::<String>() + "Command {");
+        name = format_ident!("{}Command", s.into_iter().collect::<String>());
     }
     else {panic!("Please provide the command name as literal")}
 
-    (start + &parse_fn(item_iter) + "}").parse().unwrap()
+    let res = parse_fn(item_iter);
+    quote!(
+        #[derive(Debug, Clone, opc_macros::SuperOpcCommand, Default)]
+        pub struct #name {
+            #res
+        }
+    ).into()
 }
 
-fn parse_fn(mut body: IntoIter) -> String {
+fn parse_fn(mut body: IntoIter) -> TokenStream {
 
-    let mut out = String::new();
+    let mut out = Vec::new();
 
     match body.next() {
         Some(TokenTree::Group(list)) => {
@@ -38,24 +41,33 @@ fn parse_fn(mut body: IntoIter) -> String {
 
             while let Some(n) = tt.next() {
                 match n {
-                    TokenTree::Ident(p) => {
-                        out += &("#[prefix(".to_string() + &prefix + ")] pub " + &p.to_string() + ": bool,");
+                    TokenTree::Ident(field) => {
+                        out.push(quote!(
+                            #[prefix(#prefix)]
+                            pub #field: bool,
+                        ));
                     }
                     _ => panic!("Please only use identifiers as argument names"),
                 }
             }    
         }
-        Some(TokenTree::Ident(arg)) => {
-            out += &("pub ".to_string() + &arg.to_string() + ": String,");
+        Some(TokenTree::Ident(field)) => {
+            out.push(quote!(
+                pub #field: String,
+            ));
         }
         Some(_) => panic!("Please provide a list of arguments in brackets '[arg arg2 ...]'"),
-        None => return out,
+        None => return quote!(#(#out)*),
     }
-    return out + &parse_fn(body);
+    let res = parse_fn(body);
+    quote!(
+        #(#out)*
+        #res
+    )
 }
 
 #[proc_macro_derive(SuperOpcCommand, attributes(prefix))]
-pub fn sopc_derive(input: TokenStream) -> TokenStream {
+pub fn sopc_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
     let generics = &input.generics;
@@ -91,7 +103,8 @@ pub fn sopc_derive(input: TokenStream) -> TokenStream {
     }
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     let c_name = name.clone().to_string().strip_suffix("Command").unwrap().to_ascii_lowercase();
-    let expanded = quote! {
+    
+    quote! {
         impl #impl_generics SuperOpcCommand for #name #ty_generics #where_clause {
             fn parse(args: Vec<String>) -> Option<anyhow::Result<#name>> {
                 let mut out = #name::default();
@@ -120,13 +133,12 @@ pub fn sopc_derive(input: TokenStream) -> TokenStream {
                 Some(Ok(out))
             }
         }
-    };
-
-    TokenStream::from(expanded)
+    }.into()
 }
 
 #[proc_macro]
-pub fn serve_opc(body: TokenStream) -> TokenStream {
+pub fn serve_opc(body: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let body: TokenStream = body.into();
     let item_iter = body.into_iter();
 
     let mut commands = Vec::new();
@@ -142,9 +154,7 @@ pub fn serve_opc(body: TokenStream) -> TokenStream {
         }
     }
 
-    let mut out = Vec::new();
-
-    out.push(quote!(
+    quote!(
         new_opc_command!("help" cmd);
 
         impl OpcCommand for HelpCommand {
@@ -156,40 +166,17 @@ pub fn serve_opc(body: TokenStream) -> TokenStream {
                 }
             }
 
-            fn help() -> String {
-                "Available commands:".to_string()#(+ "\n" + #command_names)*
-            }
+            fn help() -> String {"Available commands:".to_string()#(+ "\n" + #command_names)*}
         }
-    ));
-
-    out.push(quote!(
-            if let Some(res) = HelpCommand::parse(args.clone()) {
-                if let Err(err) = res {
-                    println!("{}", err)
-                } else {
-                    println!("{}", res.unwrap().run())
-                }
-            }
-        )
-    );
-
-    for cmd in commands {
-        out.push(quote!(
-            else if let Some(res) = #cmd::parse(args.clone()) {
-                if let Err(err) = res {
-                    println!("{}", err)
-                } else {
-                    println!("{}", res.unwrap().run())
-                }
-            }
-        ))
-    }
-
-    out.push(quote!(
-        else {
-            println!("Unknown command! Use 'opc help help' for further information")
+    
+        if let Some(res) = HelpCommand::parse(args.clone()) {
+            if let Err(err) = res {println!("{}", err)}
+            else {println!("{}", res.unwrap().run())}
         }
-    ));
-
-    proc_macro2::TokenStream::from_iter(out).into()
+        #(else if let Some(res) = #commands::parse(args.clone()) {
+            if let Err(err) = res {println!("{}", err)}
+            else {println!("{}", res.unwrap().run())}
+        })*
+        else {println!("Unknown command! Use 'opc help help' for further information")}
+    ).into()
 }
