@@ -1,4 +1,14 @@
-extern crate proc_macro;
+//! This is the official proc_macro crate for the [`OUTLINE_CLI`].
+//! 
+//! The result will only work with certain traits defined by [`OUTLINE_CLI`] and should therefore only be used in said crate.
+//! 
+//!
+//! This [`crate`] mainly provides [`new_opc_command!`], which is used for defining structs that represent the given command.
+//! [`serve_opc!`] is used to then provide a new `HelpCommand` struct to handle `opc help <command>` calls and serve any other given command.
+
+
+
+use proc_macro;
 
 use syn::{parse_macro_input, DeriveInput};
 use quote::{quote, format_ident};
@@ -103,7 +113,7 @@ pub fn sopc_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     }
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     let c_name = name.clone().to_string().strip_suffix("Command").unwrap().to_ascii_lowercase();
-    
+
     quote! {
         impl #impl_generics SuperOpcCommand for #name #ty_generics #where_clause {
             fn parse(args: Vec<String>) -> Option<anyhow::Result<#name>> {
@@ -155,6 +165,12 @@ pub fn serve_opc(body: proc_macro::TokenStream) -> proc_macro::TokenStream {
     }
 
     quote!(
+        let mut args = env::args();
+        args.next();
+        let args = args.collect::<Vec<String>>();
+    
+        if args.is_empty() {println!("OUTLINE Plugin Creator {} installed", version); return}
+
         new_opc_command!("help" cmd);
 
         impl OpcCommand for HelpCommand {
@@ -168,8 +184,10 @@ pub fn serve_opc(body: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
             fn help() -> String {"Available commands:".to_string()#(+ "\n" + #command_names)*}
         }
-    
-        if let Some(res) = HelpCommand::parse(args.clone()) {
+
+        if args.len() == 1 && args[0] == "help".to_string() {
+            println!("{}", HelpCommand::help())
+        } else if let Some(res) = HelpCommand::parse(args.clone()) {
             if let Err(err) = res {println!("{}", err)}
             else {println!("{}", res.unwrap().run())}
         }
@@ -177,6 +195,6 @@ pub fn serve_opc(body: proc_macro::TokenStream) -> proc_macro::TokenStream {
             if let Err(err) = res {println!("{}", err)}
             else {println!("{}", res.unwrap().run())}
         })*
-        else {println!("Unknown command! Use 'opc help help' for further information")}
+        else {println!("Unknown command! Use 'opc help' for further information")}
     ).into()
 }
