@@ -6,7 +6,7 @@
 //! This [`crate`] mainly provides [`new_opc_command!`], which is used for defining structs that represent the given command.
 //! [`serve_opc!`] is used to then provide a new `HelpCommand` struct to handle `opc help <command>` calls and serve any other given command.
 
-
+use std::fs;
 
 use proc_macro;
 
@@ -146,6 +146,7 @@ pub fn sopc_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     }.into()
 }
 
+/// Make sure to initialize a `&str` variable named `version` before calling this. 
 #[proc_macro]
 pub fn serve_opc(body: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let body: TokenStream = body.into();
@@ -197,4 +198,56 @@ pub fn serve_opc(body: proc_macro::TokenStream) -> proc_macro::TokenStream {
         })*
         else {println!("Unknown command! Use 'opc help' for further information")}
     ).into()
+}
+
+#[proc_macro]
+pub fn prov_sample_fn(body: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let body: TokenStream = body.into();
+    let mut item_iter = body.into_iter();
+
+    let content;
+    let fn_ident;
+    let fn_arguments;
+
+    match item_iter.next().expect("Please provide the function identifier") {
+        TokenTree::Ident(ident) => fn_ident = ident,
+        _ => panic!("Please provide the function identifier")
+    };
+    match item_iter.next().expect("Please provide the function arguments") {
+        TokenTree::Group(group) => fn_arguments = group,
+        _ => panic!("Please provide the function arguments")
+    };
+    match item_iter.next().expect("Please provide the file name") {
+        TokenTree::Literal(path) => content = fs::read_to_string(path.to_string().trim_matches('\"')).expect("FS error"),
+        _ => panic!("Please provide the file name")
+    };
+
+    let mut froms = Vec::new(); 
+    let mut tos = Vec::new();
+
+    while let Some(TokenTree::Ident(n)) = item_iter.next() {
+        let from = n.to_string();
+        let a = item_iter.next();
+        if let Some(TokenTree::Punct(n)) = a {
+            if n.as_char() != '-' {panic!("Expected punctuation '-', found '{}'", n.as_char())}
+        } else {panic!("Expected '->', found {:?}", a)}
+        if let Some(TokenTree::Punct(n)) = item_iter.next() {
+            if n.as_char() != '>' {panic!("Expected punctuation '>', found '{}'", n.as_char())}
+        } else {panic!("Expected '->'")}
+
+        let to = match item_iter.next().expect("Expected identifier 'to'") {
+            TokenTree::Ident(i) => i,
+            _ => panic!("expected identifier")
+        };
+        froms.push(from);
+        tos.push(to);
+    }
+
+    let res = quote!(
+        pub fn #fn_ident #fn_arguments -> String {
+            #content #(.replace(#froms, #tos))*.to_string()
+        }
+    );
+    // println!("{}", res.to_string());
+    res.into()
 }
